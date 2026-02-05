@@ -1,40 +1,31 @@
 from fastapi import Request
-from passlib.context import CryptContext
 from db import get_conn
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(password: str, hashed: str) -> bool:
-    return pwd_context.verify(password, hashed)
-
-
-def create_user(email: str, password: str) -> int:
+def get_user_by_identifier(identifier: str):
+    identifier = identifier.strip().lower()
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO users(email, hashed_password) VALUES(?,?)",
-        (email.lower().strip(), hash_password(password))
-    )
+    row = cur.execute("SELECT * FROM users WHERE identifier=?", (identifier,)).fetchone()
+    conn.close()
+    return row
+
+
+def get_or_create_user_id(identifier: str) -> int:
+    identifier = identifier.strip().lower()
+    conn = get_conn()
+    cur = conn.cursor()
+
+    row = cur.execute("SELECT id FROM users WHERE identifier=?", (identifier,)).fetchone()
+    if row:
+        conn.close()
+        return int(row["id"])
+
+    cur.execute("INSERT INTO users(identifier) VALUES(?)", (identifier,))
     conn.commit()
     user_id = cur.lastrowid
     conn.close()
     return int(user_id)
-
-
-def get_user_by_email(email: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    row = cur.execute(
-        "SELECT * FROM users WHERE email=?",
-        (email.lower().strip(),)
-    ).fetchone()
-    conn.close()
-    return row
 
 
 def login_user(request: Request, user_id: int):

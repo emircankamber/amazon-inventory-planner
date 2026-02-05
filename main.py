@@ -14,14 +14,14 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 from db import init_db, get_conn
-from auth import (
-    create_user, get_user_by_email, verify_password,
-    login_user, logout_user, require_login
-)
+from auth import get_or_create_user_id, login_user, logout_user, require_login
 
 app = FastAPI()
 
+# Render'da ENV olarak set etmen önerilir
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+SHARED_PASSWORD = os.environ.get("SHARED_PASSWORD", "123456")  # herkesin ortak şifresi
+
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 
 
@@ -31,7 +31,7 @@ def startup():
 
 
 # -----------------------
-# Helpers (date)
+# Date helpers
 # -----------------------
 def last_n_calendar_months(n: int) -> List[Tuple[int, int]]:
     today = date.today()
@@ -179,7 +179,7 @@ def compute_for_sku(cur, owner_id: int, sku: str):
 
 
 # -----------------------
-# UI Shell
+# UI
 # -----------------------
 def page_shell(title: str, body_html: str) -> str:
     return f"""
@@ -197,11 +197,10 @@ def page_shell(title: str, body_html: str) -> str:
     <div class="flex items-start justify-between gap-6 flex-wrap">
       <div>
         <h1 class="text-3xl md:text-4xl font-bold tracking-tight">{title}</h1>
-        <p class="text-slate-300 mt-2">Login + kullanıcı bazlı veri izolasyonu + silme işlemleri aktif.</p>
+        <p class="text-slate-300 mt-2">Ortak şifreli login + kullanıcıya özel veriler + silme işlemleri.</p>
       </div>
       <div class="flex gap-2 flex-wrap">
         <a class="px-4 py-2 rounded-2xl text-sm border bg-slate-900/40 border-slate-700/60 hover:bg-slate-900/60" href="/login">Giriş</a>
-        <a class="px-4 py-2 rounded-2xl text-sm border bg-slate-900/40 border-slate-700/60 hover:bg-slate-900/60" href="/register">Kayıt</a>
         <a class="px-4 py-2 rounded-2xl text-sm border bg-slate-900/40 border-slate-700/60 hover:bg-slate-900/60" href="/">Ekle</a>
         <a class="px-4 py-2 rounded-2xl text-sm border bg-slate-900/40 border-slate-700/60 hover:bg-slate-900/60" href="/products">SKU</a>
         <a class="px-4 py-2 rounded-2xl text-sm border bg-slate-900/40 border-slate-700/60 hover:bg-slate-900/60" href="/plan">Plan</a>
@@ -236,57 +235,37 @@ def build_default_rows_html() -> str:
 
 
 # -----------------------
-# AUTH
+# LOGIN (No Register)
 # -----------------------
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
-    body = """
+    body = f"""
 <div class="max-w-lg mx-auto rounded-3xl border border-slate-700/60 bg-slate-900/40 p-6">
   <h2 class="text-xl font-semibold">Giriş</h2>
+  <p class="text-slate-400 text-sm mt-2">
+    Herkes aynı şifre ile giriş yapar. Sadece kullanıcı adı/e-mail farklı olur.
+  </p>
+
   <form class="mt-4 space-y-3" method="post" action="/login">
-    <input class="w-full rounded-2xl bg-slate-900/60 border border-slate-700 px-4 py-3" name="email" type="email" placeholder="E-mail" required>
-    <input class="w-full rounded-2xl bg-slate-900/60 border border-slate-700 px-4 py-3" name="password" type="password" placeholder="Şifre" required>
-    <button class="w-full rounded-2xl bg-indigo-500/90 hover:bg-indigo-500 px-5 py-3 font-semibold" type="submit">Giriş Yap</button>
+    <input class="w-full rounded-2xl bg-slate-900/60 border border-slate-700 px-4 py-3"
+           name="identifier" type="text" placeholder="E-mail veya Username" required>
+    <input class="w-full rounded-2xl bg-slate-900/60 border border-slate-700 px-4 py-3"
+           name="password" type="password" placeholder="Ortak Şifre" required>
+    <button class="w-full rounded-2xl bg-indigo-500/90 hover:bg-indigo-500 px-5 py-3 font-semibold" type="submit">
+      Giriş Yap
+    </button>
   </form>
-  <p class="text-slate-400 text-sm mt-3">Hesabın yok mu? <a class="text-indigo-300 underline" href="/register">Kayıt ol</a></p>
 </div>
 """
     return page_shell("Login", body)
 
 
 @app.post("/login", response_class=HTMLResponse)
-def login_action(request: Request, email: str = Form(...), password: str = Form(...)):
-    user = get_user_by_email(email)
-    if not user or not verify_password(password, user["hashed_password"]):
-        return page_shell("Login", "<div class='max-w-lg mx-auto p-6 rounded-3xl border bg-slate-900/40 border-slate-700/60'>Hatalı e-mail veya şifre. <a class='underline' href='/login'>Tekrar dene</a></div>")
-    login_user(request, int(user["id"]))
-    return RedirectResponse(url="/", status_code=303)
+def login_action(request: Request, identifier: str = Form(...), password: str = Form(...)):
+    if password != SHARED_PASSWORD:
+        return page_shell("Login", "<div class='max-w-lg mx-auto p-6 rounded-3xl border bg-slate-900/40 border-slate-700/60'>Şifre hatalı. <a class='underline' href='/login'>Tekrar dene</a></div>")
 
-
-@app.get("/register", response_class=HTMLResponse)
-def register_page():
-    body = """
-<div class="max-w-lg mx-auto rounded-3xl border border-slate-700/60 bg-slate-900/40 p-6">
-  <h2 class="text-xl font-semibold">Kayıt Ol</h2>
-  <form class="mt-4 space-y-3" method="post" action="/register">
-    <input class="w-full rounded-2xl bg-slate-900/60 border border-slate-700 px-4 py-3" name="email" type="email" placeholder="E-mail" required>
-    <input class="w-full rounded-2xl bg-slate-900/60 border border-slate-700 px-4 py-3" name="password" type="password" placeholder="Şifre (min 6)" required>
-    <button class="w-full rounded-2xl bg-emerald-500/90 hover:bg-emerald-500 px-5 py-3 font-semibold" type="submit">Hesap Oluştur</button>
-  </form>
-  <p class="text-slate-400 text-sm mt-3">Hesabın var mı? <a class="text-indigo-300 underline" href="/login">Giriş yap</a></p>
-</div>
-"""
-    return page_shell("Register", body)
-
-
-@app.post("/register", response_class=HTMLResponse)
-def register_action(request: Request, email: str = Form(...), password: str = Form(...)):
-    if len(password) < 6:
-        return page_shell("Register", "<div class='max-w-lg mx-auto p-6 rounded-3xl border bg-slate-900/40 border-slate-700/60'>Şifre en az 6 karakter olmalı. <a class='underline' href='/register'>Geri</a></div>")
-    try:
-        user_id = create_user(email, password)
-    except Exception:
-        return page_shell("Register", "<div class='max-w-lg mx-auto p-6 rounded-3xl border bg-slate-900/40 border-slate-700/60'>Bu e-mail zaten kayıtlı. <a class='underline' href='/login'>Giriş yap</a></div>")
+    user_id = get_or_create_user_id(identifier)
     login_user(request, user_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -533,7 +512,7 @@ def products(request: Request):
 
 
 # -----------------------
-# PLAN LIST (ORDER LIST) + DELETE FROM PLAN
+# PLAN LIST + DELETE FROM PLAN (SKU delete)
 # -----------------------
 @app.get("/plan", response_class=HTMLResponse)
 def plan(request: Request):
@@ -566,7 +545,7 @@ def plan(request: Request):
           <td class="py-3 text-right">
             <div class="flex justify-end gap-2">
               <a class="px-4 py-2 rounded-2xl text-sm border border-slate-700/60 bg-slate-900/40 hover:bg-slate-900/60" href="/product/{sku}">Detay</a>
-              <form method="post" action="/delete/product/{sku}" onsubmit="return confirm('Bu SKU plan listesinden kaldırılacak (SKU + tüm satışları silinir). Emin misin?');">
+              <form method="post" action="/delete/product/{sku}" onsubmit="return confirm('Plan listesinden kaldırılır: SKU + tüm satış kayıtları silinir. Emin misin?');">
                 <button type="submit" class="px-4 py-2 rounded-2xl text-sm border border-rose-500/30 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25">Sil</button>
               </form>
             </div>
