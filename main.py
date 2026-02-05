@@ -24,10 +24,8 @@ SHARED_PASSWORD = os.environ.get("SHARED_PASSWORD", "123456")  # herkesin ortak 
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 
-
-@app.on_event("startup")
-def startup():
-    init_db()
+# ✅ Render'da ilk request'te 500 yememek için DB'yi import anında garanti kur
+init_db()
 
 
 # -----------------------
@@ -239,7 +237,7 @@ def build_default_rows_html() -> str:
 # -----------------------
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
-    body = f"""
+    body = """
 <div class="max-w-lg mx-auto rounded-3xl border border-slate-700/60 bg-slate-900/40 p-6">
   <h2 class="text-xl font-semibold">Giriş</h2>
   <p class="text-slate-400 text-sm mt-2">
